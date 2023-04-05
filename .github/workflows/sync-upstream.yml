@@ -1,0 +1,30 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Run the workflow every day at midnight (UTC)
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Configure Git user
+      run: |
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+    - name: Add upstream remote
+      run: git remote add upstream https://github.com/moodle/moodle.git
+
+    - name: Fetch upstream changes
+      run: git fetch upstream
+
+    - name: Merge upstream changes
+      run: |
+        git checkout MOODLE_401_STABLE # Replace 'main' with the name of your default branch, if different
+        git merge upstream/MOODLE_401_STABLE # Replace 'main' with the name of the upstream default branch, if different
+    - name: Push changes
+      run: git push origin MOODLE_401_STABLE # Replace 'main' with the name of your default branch, if different
