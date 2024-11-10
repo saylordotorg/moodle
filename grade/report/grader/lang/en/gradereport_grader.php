@@ -23,6 +23,10 @@
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+$string['aria:dropdowncolumns'] = 'Collapsed columns found';
+$string['clearsearch'] = 'Clear searched users';
+$string['collapsedcolumns'] = 'Collapsed columns <span class="badge rounded-pill bg-primary text-white ms-1" data-collapse="count">{$a}</span>';
+$string['editingmode_title'] = 'Editing the grader report';
 $string['eventgradereportviewed'] = 'Grader report viewed';
 $string['grader:manage'] = 'Manage the grader report';
 $string['grader:view'] = 'View grader report';
@@ -43,14 +47,12 @@ $string['privacy:metadata:preference:grade_report_showranges'] = 'Whether to dis
 $string['privacy:metadata:preference:grade_report_showuserimage'] = 'Whether to show the user\'s profile image next to the name';
 $string['privacy:metadata:preference:grade_report_studentsperpage'] = 'The number of students displayed per page in the grader report';
 $string['privacy:request:preference:grade_report_grader_collapsed_categories'] = 'You have some gradebook categories collapsed in the "{$a->name}" course';
+$string['reopencolumn'] = 'Expand column {$a}';
 $string['summarygrader'] = 'A table with the names of students in the first column, with assessable activities grouped by course and category across the top.';
-$string['showingxofy'] = 'Showing {$a->found} of {$a->total}';
 $string['useractivitygrade'] = '{$a} grade';
 $string['overriddengrade'] = 'Overridden grade';
 $string['advancedgrading'] = 'View {$a} results';
 $string['cellactions'] = 'Cell actions';
-$string['viewallresults'] = 'View all results for "{$a}"';
-$string['viewresultsuser'] = 'View results for {$a}';
 
 // Deprecated since Moodle 4.2.
 $string['privacy:metadata:preference:grade_report_showanalysisicon'] = 'Whether to show grade analysis icon by default. If the activity module supports it, the grade analysis icon links to a page with more detailed explanation of the grade and how it was obtained.';

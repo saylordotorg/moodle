@@ -84,8 +84,8 @@ class restore_course_task extends restore_task {
         if ($this->plan->get_mode() == backup::MODE_IMPORT) {
             // No need to do anything with enrolments.
 
-        } else if (!$this->get_setting_value('users') or $this->plan->get_mode() == backup::MODE_HUB) {
-            if ($this->get_setting_value('enrolments') == backup::ENROL_ALWAYS && $this->plan->get_mode() != backup::MODE_HUB) {
+        } else if (!$this->get_setting_value('users')) {
+            if ($this->get_setting_value('enrolments') == backup::ENROL_ALWAYS) {
                 // Restore enrolment methods.
                 $this->add_step(new restore_enrolments_structure_step('course_enrolments', 'enrolments.xml'));
             } else if ($this->get_target() == backup::TARGET_CURRENT_ADDING or $this->get_target() == backup::TARGET_EXISTING_ADDING) {
@@ -141,7 +141,7 @@ class restore_course_task extends restore_task {
      * Define the contents in the course that must be
      * processed by the link decoder
      */
-    static public function define_decode_contents() {
+    public static function define_decode_contents() {
         $contents = array();
 
         $contents[] = new restore_decode_content('course', 'summary');
@@ -154,7 +154,7 @@ class restore_course_task extends restore_task {
      * Define the decoding rules for links belonging
      * to the course to be executed by the link decoder
      */
-    static public function define_decode_rules() {
+    public static function define_decode_rules() {
         $rules = array();
 
         // Link to the course main page (it also covers "&topic=xx" and "&week=xx"
@@ -164,8 +164,10 @@ class restore_course_task extends restore_task {
         // A few other key course links.
         $rules[] = new restore_decode_rule('GRADEINDEXBYID',       '/grade/index.php?id=$1',        'course');
         $rules[] = new restore_decode_rule('GRADEREPORTINDEXBYID', '/grade/report/index.php?id=$1', 'course');
-        $rules[] = new restore_decode_rule('BADGESVIEWBYID',       '/badges/view.php?type=2&id=$1', 'course');
+        $rules[] = new restore_decode_rule('BADGESVIEWBYID',       '/badges/index.php?type=2&id=$1', 'course');
         $rules[] = new restore_decode_rule('USERINDEXVIEWBYID',    '/user/index.php?id=$1',         'course');
+        $rules[] = new restore_decode_rule('PLUGINFILEBYCONTEXT',  '/pluginfile.php/$1',            'context');
+        $rules[] = new restore_decode_rule('PLUGINFILEBYCONTEXTURLENCODED', '/pluginfile.php/$1', 'context', true);
 
         return $rules;
     }

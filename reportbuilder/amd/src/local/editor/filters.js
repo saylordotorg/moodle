@@ -23,14 +23,13 @@
 
 "use strict";
 
-import $ from 'jquery';
-import CustomEvents from 'core/custom_interaction_events';
+import AutoComplete from 'core/form-autocomplete';
 import 'core/inplace_editable';
 import Notification from 'core/notification';
 import Pending from 'core/pending';
 import {prefetchStrings} from 'core/prefetch';
 import SortableList from 'core/sortable_list';
-import {get_string as getString} from 'core/str';
+import {getString} from 'core/str';
 import Templates from 'core/templates';
 import {add as addToast} from 'core/toast';
 import * as reportSelectors from 'core_reportbuilder/local/selectors';
@@ -65,7 +64,12 @@ const reloadSettingsFiltersRegion = (reportElement, templateContext) => {
  * Initialise filters form, must be called on each init because the form container is re-created when switching editor modes
  */
 const initFiltersForm = () => {
-    CustomEvents.define(reportSelectors.actions.reportAddFilter, [CustomEvents.events.accessibleChange]);
+    const reportElement = document.querySelector(reportSelectors.regions.report);
+
+    // Enhance filter selector.
+    const reportAddFilter = reportElement.querySelector(reportSelectors.actions.reportAddFilter);
+    AutoComplete.enhanceField(reportAddFilter, false, '', getString('selectafilter', 'core_reportbuilder'))
+        .catch(Notification.exception);
 };
 
 /**
@@ -80,6 +84,7 @@ export const init = initialized => {
         'filteradded',
         'filterdeleted',
         'filtermoved',
+        'selectafilter',
     ]);
 
     prefetchStrings('core', [
@@ -91,14 +96,14 @@ export const init = initialized => {
         return;
     }
 
-    // Add filter to report. Use custom events helper to ensure consistency across platforms.
-    $(document).on(CustomEvents.events.accessibleChange, reportSelectors.actions.reportAddFilter, event => {
+    // Add filter to report.
+    document.addEventListener('change', event => {
         const reportAddFilter = event.target.closest(reportSelectors.actions.reportAddFilter);
         if (reportAddFilter) {
             event.preventDefault();
 
             // Check if dropdown is closed with no filter selected.
-            if (reportAddFilter.selectedIndex === 0) {
+            if (reportAddFilter.value === "" || reportAddFilter.value === "0") {
                 return;
             }
 
@@ -145,26 +150,31 @@ export const init = initialized => {
         }
     });
 
-    // Initialize sortable list to handle active filters moving (note JQuery dependency, see MDL-72293 for resolution).
-    var activeFiltersSortableList = new SortableList(`${reportSelectors.regions.activeFilters} ul`, {isHorizontal: false});
+    // Initialize sortable list to handle active filters moving.
+    const activeFiltersSelector = `${reportSelectors.regions.activeFilters} ul`;
+    const activeFiltersSortableList = new SortableList(activeFiltersSelector, {isHorizontal: false});
     activeFiltersSortableList.getElementName = element => Promise.resolve(element.data('filterName'));
 
-    $(document).on(SortableList.EVENTS.DROP, `${reportSelectors.regions.report} li[data-filter-id]`, (event, info) => {
-        if (info.positionChanged) {
+    document.addEventListener(SortableList.EVENTS.elementDrop, event => {
+        const reportOrderFilter = event.target.closest(`${activeFiltersSelector} ${reportSelectors.regions.activeFilter}`);
+        if (reportOrderFilter && event.detail.positionChanged) {
             const pendingPromise = new Pending('core_reportbuilder/filters:reorder');
-            const reportElement = event.target.closest(reportSelectors.regions.report);
-            const filterId = info.element.data('filterId');
-            const filterPosition = info.element.data('filterPosition');
+
+            const reportElement = reportOrderFilter.closest(reportSelectors.regions.report);
+            const {filterId, filterPosition, filterName} = reportOrderFilter.dataset;
 
             // Select target position, if moving to the end then count number of element siblings.
-            let targetFilterPosition = info.targetNextElement.data('filterPosition') || info.element.siblings().length + 2;
+            let targetFilterPosition = event.detail.targetNextElement.data('filterPosition')
+                || event.detail.element.siblings().length + 2;
             if (targetFilterPosition > filterPosition) {
                 targetFilterPosition--;
             }
 
-            reorderFilter(reportElement.dataset.reportId, filterId, targetFilterPosition)
-                .then(data => reloadSettingsFiltersRegion(reportElement, data))
-                .then(() => getString('filtermoved', 'core_reportbuilder', info.element.data('filterName')))
+            // Re-order filter, giving drop event transition time to finish.
+            const reorderPromise = reorderFilter(reportElement.dataset.reportId, filterId, targetFilterPosition);
+            Promise.all([reorderPromise, new Promise(resolve => setTimeout(resolve, 1000))])
+                .then(([data]) => reloadSettingsFiltersRegion(reportElement, data))
+                .then(() => getString('filtermoved', 'core_reportbuilder', filterName))
                 .then(addToast)
                 .then(() => pendingPromise.resolve())
                 .catch(Notification.exception);

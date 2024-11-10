@@ -22,8 +22,6 @@
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-defined('MOODLE_INTERNAL') || die();
-
 /**
  * Function to upgrade grader report.
  *
@@ -72,6 +70,18 @@ function xmldb_gradereport_grader_upgrade(int $oldversion): bool {
         $DB->delete_records('config_plugins', ['plugin' => 'grade_gradereport_grader']);
         upgrade_plugin_savepoint(true, 2023032800, 'gradereport', 'grader');
     }
+
+    // Automatically generated Moodle v4.2.0 release upgrade line.
+    // Put any upgrade step following this.
+
+    // Automatically generated Moodle v4.3.0 release upgrade line.
+    // Put any upgrade step following this.
+
+    // Automatically generated Moodle v4.4.0 release upgrade line.
+    // Put any upgrade step following this.
+
+    // Automatically generated Moodle v4.5.0 release upgrade line.
+    // Put any upgrade step following this.
 
     return true;
 }

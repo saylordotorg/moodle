@@ -21,8 +21,9 @@ namespace core_reportbuilder\local\helpers;
 use advanced_testcase;
 use core_reportbuilder_generator;
 use invalid_parameter_exception;
-use core_reportbuilder\local\models\column;
-use core_reportbuilder\local\models\filter;
+use core_reportbuilder\datasource;
+use core_reportbuilder\local\models\{audience, column, filter, schedule};
+use core_tag_tag;
 use core_user\reportbuilder\datasource\users;
 
 /**
@@ -33,7 +34,156 @@ use core_user\reportbuilder\datasource\users;
  * @copyright   2021 Paul Holden <paulh@moodle.com>
  * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-class report_test extends advanced_testcase {
+final class report_test extends advanced_testcase {
+
+    /**
+     * Test creation report
+     */
+    public function test_create_report(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        $report = report::create_report((object) [
+            'name' => 'My report with tags',
+            'source' => users::class,
+            'tags' => ['cat', 'dog'],
+        ]);
+
+        $this->assertEquals('My report with tags', $report->get('name'));
+        $this->assertEquals(datasource::TYPE_CUSTOM_REPORT, $report->get('type'));
+        $this->assertEqualsCanonicalizing(['cat', 'dog'],
+            core_tag_tag::get_item_tags_array('core_reportbuilder', 'reportbuilder_report', $report->get('id')));
+
+        $report = report::create_report((object) [
+            'name' => 'My report without tags',
+            'source' => users::class,
+        ]);
+
+        $this->assertEquals('My report without tags', $report->get('name'));
+        $this->assertEquals(datasource::TYPE_CUSTOM_REPORT, $report->get('type'));
+        $this->assertEmpty(core_tag_tag::get_item_tags_array('core_reportbuilder', 'reportbuilder_report',
+            $report->get('id')));
+    }
+
+    /**
+     * Test updating report
+     */
+    public function test_update_report(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var core_reportbuilder_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_reportbuilder');
+        $report = $generator->create_report(['name' => 'My report', 'source' => users::class, 'uniquerows' => 0]);
+
+        $reportupdated = report::update_report((object) [
+            'id' => $report->get('id'),
+            'name' => 'My renamed report without add tags',
+            'uniquerows' => 1,
+        ]);
+
+        $this->assertEquals('My renamed report without add tags', $reportupdated->get('name'));
+        $this->assertTrue($reportupdated->get('uniquerows'));
+        $this->assertEmpty(core_tag_tag::get_item_tags_array('core_reportbuilder', 'reportbuilder_report',
+            $reportupdated->get('id')));
+
+        $reportupdated = report::update_report((object) [
+            'id' => $report->get('id'),
+            'name' => 'My renamed report adding tags',
+            'uniquerows' => 1,
+            'tags' => ['cat', 'dog'],
+        ]);
+
+        $this->assertEquals('My renamed report adding tags', $reportupdated->get('name'));
+        $this->assertTrue($reportupdated->get('uniquerows'));
+        $this->assertEqualsCanonicalizing(['cat', 'dog'],
+            core_tag_tag::get_item_tags_array('core_reportbuilder', 'reportbuilder_report', $reportupdated->get('id')));
+    }
+
+    /**
+     * Test duplicate report
+     */
+    public function test_duplicate_report(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var core_reportbuilder_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_reportbuilder');
+
+        // Create custom report containing single column, condition and filter..
+        $report = $generator->create_report(['name' => 'Report 1', 'source' => users::class, 'default' => 0]);
+        $column = $generator->create_column(['reportid' => $report->get('id'), 'uniqueidentifier' => 'user:lastname']);
+        $condition = $generator->create_condition(['reportid' => $report->get('id'), 'uniqueidentifier' => 'user:firstname']);
+        $filter = $generator->create_filter(['reportid' => $report->get('id'), 'uniqueidentifier' => 'user:email']);
+
+        // Add an audience and schedule.
+        $audience = $generator->create_audience(['reportid' => $report->get('id'), 'configdata' => []]);
+        $schedule = $generator->create_schedule([
+            'reportid' => $report->get('id'),
+            'name' => 'My schedule',
+            'audiences' => json_encode([
+                $audience->get_persistent()->get('id'),
+            ]),
+        ]);
+
+        // Duplicate report with audiences and schedules.
+        $newreport = report::duplicate_report($report, 'Report 1 copy', true, true);
+        $this->assertNotEquals($report->get('id'), $newreport->get('id'));
+        $this->assertEquals('Report 1 copy', $newreport->get('name'));
+        $this->assertEquals(users::class, $newreport->get('source'));
+
+        // Assert new report columns.
+        $newcolumns = column::get_records(['reportid' => $newreport->get('id')]);
+        $this->assertCount(1, $newcolumns);
+        [$newcolumn] = $newcolumns;
+        $this->assertNotEquals($column->get('id'), $newcolumn->get('id'));
+        $this->assertEquals('user:lastname', $newcolumn->get('uniqueidentifier'));
+
+        // Assert new report conditions.
+        $newconditions = filter::get_condition_records($newreport->get('id'));
+        $this->assertCount(1, $newconditions);
+        [$newcondition] = $newconditions;
+        $this->assertNotEquals($condition->get('id'), $newcondition->get('id'));
+        $this->assertEquals('user:firstname', $newcondition->get('uniqueidentifier'));
+
+        // Assert new report filters.
+        $newfilters = filter::get_filter_records($newreport->get('id'));
+        $this->assertCount(1, $newfilters);
+        [$newfilter] = $newfilters;
+        $this->assertNotEquals($filter->get('id'), $newfilter->get('id'));
+        $this->assertEquals('user:email', $newfilter->get('uniqueidentifier'));
+
+        // Assert new report audiences.
+        $newaudiences = audience::get_records(['reportid' => $newreport->get('id')]);
+        $this->assertCount(1, $newaudiences);
+        [$newaudience] = $newaudiences;
+        $this->assertNotEquals($audience->get_persistent()->get('id'), $newaudience->get('id'));
+
+         // Assert new report schedules.
+        $newschedules = schedule::get_records(['reportid' => $newreport->get('id')]);
+        $this->assertCount(1, $newschedules);
+        [$newschedule] = $newschedules;
+        $this->assertNotEquals($schedule->get('id'), $newschedule->get('id'));
+        $this->assertEquals([
+            $newaudience->get('id'),
+        ], (array) json_decode($newschedule->get('audiences')));
+
+        // Duplicate report without schedules.
+        $newreporttwo = report::duplicate_report($report, 'Report 1 copy #2', true, false);
+        $this->assertEquals(1, column::count_records(['reportid' => $newreporttwo->get('id')]));
+        $this->assertEquals(1, filter::count_records(['reportid' => $newreporttwo->get('id'), 'iscondition' => 1]));
+        $this->assertEquals(1, filter::count_records(['reportid' => $newreporttwo->get('id'), 'iscondition' => 0]));
+        $this->assertEquals(1, audience::count_records(['reportid' => $newreporttwo->get('id')]));
+        $this->assertEquals(0, schedule::count_records(['reportid' => $newreporttwo->get('id')]));
+
+        // Duplicate report without audiences or schedules.
+        $newreportthree = report::duplicate_report($report, 'Report 1 copy #3', false, false);
+        $this->assertEquals(1, column::count_records(['reportid' => $newreportthree->get('id')]));
+        $this->assertEquals(1, filter::count_records(['reportid' => $newreportthree->get('id'), 'iscondition' => 1]));
+        $this->assertEquals(1, filter::count_records(['reportid' => $newreportthree->get('id'), 'iscondition' => 0]));
+        $this->assertEquals(0, audience::count_records(['reportid' => $newreportthree->get('id')]));
+        $this->assertEquals(0, schedule::count_records(['reportid' => $newreportthree->get('id')]));
+    }
 
     /**
      * Test deleting report
@@ -46,7 +196,8 @@ class report_test extends advanced_testcase {
         $generator = $this->getDataGenerator()->get_plugin_generator('core_reportbuilder');
 
         // Create Report1 and add some elements.
-        $report1 = $generator->create_report(['name' => 'My report 1', 'source' => users::class, 'default' => false]);
+        $report1 = $generator->create_report(['name' => 'My report 1', 'source' => users::class, 'default' => false,
+            'tags' => ['cat', 'dog']]);
         $column1 = $generator->create_column(['reportid' => $report1->get('id'), 'uniqueidentifier' => 'user:email']);
         $filter1 = $generator->create_filter(['reportid' => $report1->get('id'), 'uniqueidentifier' => 'user:email']);
         $condition1 = $generator->create_condition(['reportid' => $report1->get('id'), 'uniqueidentifier' => 'user:email']);
@@ -58,13 +209,15 @@ class report_test extends advanced_testcase {
         $condition2 = $generator->create_condition(['reportid' => $report2->get('id'), 'uniqueidentifier' => 'user:email']);
 
         // Delete Report1.
-        report::delete_report($report1->get('id'));
+        $result = report::delete_report($report1->get('id'));
+        $this->assertTrue($result);
 
         // Make sure Report1, and all it's elements are deleted.
         $this->assertFalse($report1::record_exists($report1->get('id')));
         $this->assertFalse($column1::record_exists($column1->get('id')));
         $this->assertFalse($filter1::record_exists($filter1->get('id')));
         $this->assertFalse($condition1::record_exists($condition1->get('id')));
+        $this->assertEmpty(core_tag_tag::get_item_tags_array('core_reportbuilder', 'reportbuilder_report', $report1->get('id')));
 
         // Make sure Report2, and all it's elements still exist.
         $this->assertTrue($report2::record_exists($report2->get('id')));
@@ -387,6 +540,25 @@ class report_test extends advanced_testcase {
     }
 
     /**
+     * Test adding duplicate report condition
+     */
+    public function test_add_report_condition_duplicate(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var core_reportbuilder_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_reportbuilder');
+        $report = $generator->create_report(['name' => 'My report', 'source' => users::class, 'default' => false]);
+
+        // First one is fine.
+        report::add_report_condition($report->get('id'), 'user:email');
+
+        $this->expectException(invalid_parameter_exception::class);
+        $this->expectExceptionMessage('Duplicate condition');
+        report::add_report_condition($report->get('id'), 'user:email');
+    }
+
+    /**
      * Test deleting report condition
      */
     public function test_delete_report_condition(): void {
@@ -534,6 +706,25 @@ class report_test extends advanced_testcase {
         $this->expectException(invalid_parameter_exception::class);
         $this->expectExceptionMessage('Invalid filter');
         report::add_report_filter($report->get('id'), 'user:invalid');
+    }
+
+    /**
+     * Test adding duplicate report filter
+     */
+    public function test_add_report_filter_duplicate(): void {
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var core_reportbuilder_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_reportbuilder');
+        $report = $generator->create_report(['name' => 'My report', 'source' => users::class, 'default' => false]);
+
+        // First one is fine.
+        report::add_report_filter($report->get('id'), 'user:email');
+
+        $this->expectException(invalid_parameter_exception::class);
+        $this->expectExceptionMessage('Duplicate filter');
+        report::add_report_filter($report->get('id'), 'user:email');
     }
 
     /**

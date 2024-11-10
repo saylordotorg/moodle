@@ -24,14 +24,14 @@
 "use strict";
 
 import $ from 'jquery';
-import CustomEvents from 'core/custom_interaction_events';
 import {dispatchEvent} from 'core/event_dispatcher';
+import AutoComplete from 'core/form-autocomplete';
 import 'core/inplace_editable';
 import Notification from 'core/notification';
 import Pending from 'core/pending';
 import {prefetchStrings} from 'core/prefetch';
 import SortableList from 'core/sortable_list';
-import {get_string as getString} from 'core/str';
+import {getString} from 'core/str';
 import Templates from 'core/templates';
 import {add as addToast} from 'core/toast';
 import DynamicForm from 'core_form/dynamicform';
@@ -52,7 +52,8 @@ const reloadSettingsConditionsRegion = (reportElement, templateContext) => {
 
     return Templates.renderForPromise('core_reportbuilder/local/settings/conditions', {conditions: templateContext})
         .then(({html, js}) => {
-            Templates.replaceNode(settingsConditionsRegion, html, js + templateContext.javascript);
+            const conditionsjs = $.parseHTML(templateContext.javascript, null, true).map(node => node.innerHTML).join("\n");
+            Templates.replaceNode(settingsConditionsRegion, html, js + conditionsjs);
 
             initConditionsForm();
 
@@ -68,10 +69,14 @@ const reloadSettingsConditionsRegion = (reportElement, templateContext) => {
  * Initialise conditions form, must be called on each init because the form container is re-created when switching editor modes
  */
 const initConditionsForm = () => {
-    CustomEvents.define(reportSelectors.actions.reportAddCondition, [CustomEvents.events.accessibleChange]);
+    const reportElement = document.querySelector(reportSelectors.regions.report);
+
+    // Enhance condition selector.
+    const reportAddCondition = reportElement.querySelector(reportSelectors.actions.reportAddCondition);
+    AutoComplete.enhanceField(reportAddCondition, false, '', getString('selectacondition', 'core_reportbuilder'))
+        .catch(Notification.exception);
 
     // Handle dynamic conditions form.
-    const reportElement = document.querySelector(reportSelectors.regions.report);
     const conditionFormContainer = reportElement.querySelector(reportSelectors.regions.settingsConditions);
     if (!conditionFormContainer) {
         return;
@@ -133,6 +138,7 @@ export const init = initialized => {
         'resetall',
         'resetconditions',
         'resetconditionsconfirm',
+        'selectacondition',
     ]);
 
     prefetchStrings('core', [
@@ -144,14 +150,14 @@ export const init = initialized => {
         return;
     }
 
-    // Add condition to report. Use custom events helper to ensure consistency across platforms.
-    $(document).on(CustomEvents.events.accessibleChange, reportSelectors.actions.reportAddCondition, event => {
+    // Add condition to report.
+    document.addEventListener('change', event => {
         const reportAddCondition = event.target.closest(reportSelectors.actions.reportAddCondition);
         if (reportAddCondition) {
             event.preventDefault();
 
             // Check if dropdown is closed with no condition selected.
-            if (reportAddCondition.selectedIndex === 0) {
+            if (reportAddCondition.value === "" || reportAddCondition.value === "0") {
                 return;
             }
 
@@ -204,27 +210,31 @@ export const init = initialized => {
         }
     });
 
-    // Initialize sortable list to handle active conditions moving (note JQuery dependency, see MDL-72293 for resolution).
-    var activeConditionsSortableList = new SortableList(`${reportSelectors.regions.activeConditions}`,
-        {isHorizontal: false});
+    // Initialize sortable list to handle active conditions moving.
+    const activeConditionsSelector = reportSelectors.regions.activeConditions;
+    const activeConditionsSortableList = new SortableList(activeConditionsSelector, {isHorizontal: false});
     activeConditionsSortableList.getElementName = element => Promise.resolve(element.data('conditionName'));
 
-    $(document).on(SortableList.EVENTS.DROP, reportSelectors.regions.activeCondition, (event, info) => {
-        if (info.positionChanged) {
+    document.addEventListener(SortableList.EVENTS.elementDrop, event => {
+        const reportOrderCondition = event.target.closest(`${activeConditionsSelector} ${reportSelectors.regions.activeCondition}`);
+        if (reportOrderCondition && event.detail.positionChanged) {
             const pendingPromise = new Pending('core_reportbuilder/conditions:reorder');
-            const reportElement = event.target.closest(reportSelectors.regions.report);
-            const conditionId = info.element.data('conditionId');
-            const conditionPosition = info.element.data('conditionPosition');
+
+            const reportElement = reportOrderCondition.closest(reportSelectors.regions.report);
+            const {conditionId, conditionPosition, conditionName} = reportOrderCondition.dataset;
 
             // Select target position, if moving to the end then count number of element siblings.
-            let targetConditionPosition = info.targetNextElement.data('conditionPosition') || info.element.siblings().length + 2;
+            let targetConditionPosition = event.detail.targetNextElement.data('conditionPosition')
+                || event.detail.element.siblings().length + 2;
             if (targetConditionPosition > conditionPosition) {
                 targetConditionPosition--;
             }
 
-            reorderCondition(reportElement.dataset.reportId, conditionId, targetConditionPosition)
-                .then(data => reloadSettingsConditionsRegion(reportElement, data))
-                .then(() => getString('conditionmoved', 'core_reportbuilder', info.element.data('conditionName')))
+            // Re-order condition, giving drop event transition time to finish.
+            const reorderPromise = reorderCondition(reportElement.dataset.reportId, conditionId, targetConditionPosition);
+            Promise.all([reorderPromise, new Promise(resolve => setTimeout(resolve, 1000))])
+                .then(([data]) => reloadSettingsConditionsRegion(reportElement, data))
+                .then(() => getString('conditionmoved', 'core_reportbuilder', conditionName))
                 .then(addToast)
                 .then(() => {
                     dispatchEvent(reportEvents.tableReload, {}, reportElement);

@@ -23,9 +23,8 @@ use invalid_parameter_exception;
 use core\persistent;
 use core_reportbuilder\datasource;
 use core_reportbuilder\manager;
-use core_reportbuilder\local\models\column;
-use core_reportbuilder\local\models\filter;
-use core_reportbuilder\local\models\report as report_model;
+use core_reportbuilder\local\models\{audience as audience_model, column, filter, report as report_model, schedule};
+use core_tag_tag;
 
 /**
  * Helper class for manipulating custom reports and their elements (columns, filters, conditions, etc)
@@ -48,19 +47,26 @@ class report {
         $data->name = trim($data->name);
         $data->type = datasource::TYPE_CUSTOM_REPORT;
 
-        $reportpersistent = manager::create_report_persistent($data);
+        // Create report persistent.
+        $report = manager::create_report_persistent($data);
 
         // Add datasource default columns, filters and conditions to the report.
         if ($default) {
-            $source = $reportpersistent->get('source');
+            $source = $report->get('source');
             /** @var datasource $datasource */
-            $datasource = new $source($reportpersistent, []);
+            $datasource = new $source($report);
             $datasource->add_default_columns();
             $datasource->add_default_filters();
             $datasource->add_default_conditions();
         }
 
-        return $reportpersistent;
+        // Report tags.
+        if (property_exists($data, "tags")) {
+            core_tag_tag::set_item_tags('core_reportbuilder', 'reportbuilder_report', $report->get('id'),
+                $report->get_context(), $data->tags);
+        }
+
+        return $report;
     }
 
     /**
@@ -80,7 +86,97 @@ class report {
             'uniquerows' => $data->uniquerows,
         ])->update();
 
+        // Report tags.
+        if (property_exists($data, "tags")) {
+            core_tag_tag::set_item_tags('core_reportbuilder', 'reportbuilder_report', $report->get('id'),
+                $report->get_context(), $data->tags);
+        }
+
         return $report;
+    }
+
+
+    /**
+     * Duplicate custom report
+     *
+     * @param report_model $report The report to duplicate.
+     * @param string $reportname
+     * @param bool $duplicateaudiences
+     * @param bool $duplicateschedules
+     * @return report_model The duplicated report.
+     */
+    public static function duplicate_report(
+        report_model $report,
+        string $reportname,
+        bool $duplicateaudiences,
+        bool $duplicateschedules,
+    ): report_model {
+        $reportinstance = manager::get_report_from_persistent($report);
+
+        // Copy the original report, removing properties to be re-created when duplicating.
+        $record = $report->to_record();
+        unset($record->id, $record->usercreated);
+
+        // Create new report.
+        $record->name = $reportname;
+        $record->tags = core_tag_tag::get_item_tags_array('core_reportbuilder', 'reportbuilder_report', $report->get('id'));
+        $newreport = static::create_report($record, false);
+
+        // Duplicate report content.
+        $columns = array_map(fn($column) => $column->get_persistent(), $reportinstance->get_active_columns());
+        static::duplicate_report_content($columns, $newreport->get('id'));
+
+        $conditions = array_map(fn($condition) => $condition->get_persistent(), $reportinstance->get_active_conditions());
+        static::duplicate_report_content($conditions, $newreport->get('id'));
+
+        $filters = array_map(fn($filter) => $filter->get_persistent(), $reportinstance->get_active_filters());
+        static::duplicate_report_content($filters, $newreport->get('id'));
+
+        // Duplicate audiences.
+        if ($duplicateaudiences) {
+            $audiencemap = [];
+
+            foreach (audience::get_base_records($report->get('id')) as $audienceinstance) {
+
+                // If user can't edit the current audience then do not copy it.
+                if (!$audienceinstance->user_can_edit()) {
+                    continue;
+                }
+
+                $audiencerecord = $audienceinstance->get_persistent()->to_record();
+                $audiencerecordid = $audiencerecord->id;
+                unset($audiencerecord->id, $audiencerecord->usercreated);
+
+                $newaudience = (new audience_model(0, $audiencerecord))
+                    ->set('reportid', $newreport->get('id'))
+                    ->create();
+
+                $audiencemap[$audiencerecordid] = $newaudience->get('id');
+            }
+
+            // Duplicate schedules and map them to the new audience ids.
+            if ($duplicateschedules) {
+                foreach (schedule::get_records(['reportid' => $report->get('id')]) as $schedule) {
+                    $schedulerecord = $schedule->to_record();
+                    unset($schedulerecord->id, $schedulerecord->usercreated);
+
+                    // Map new audience ids with the old ones.
+                    $audiences = array_map(
+                        fn($audienceid) => $audiencemap[$audienceid] ?? 0,
+                        (array) json_decode($schedulerecord->audiences),
+                    );
+
+                    (new schedule(0, $schedulerecord))
+                        ->set_many([
+                            'reportid' => $newreport->get('id'),
+                            'audiences' => json_encode($audiences),
+                        ])
+                        ->create();
+                }
+            }
+        }
+
+        return $newreport;
     }
 
     /**
@@ -96,6 +192,9 @@ class report {
             throw new invalid_parameter_exception('Invalid report');
         }
 
+        // Report tags.
+        core_tag_tag::remove_all_item_tags('core_reportbuilder', 'reportbuilder_report', $report->get('id'));
+
         return $report->delete();
     }
 
@@ -110,6 +209,7 @@ class report {
     public static function add_report_column(int $reportid, string $uniqueidentifier): column {
         $report = manager::get_report_from_id($reportid);
 
+        // Ensure column is available.
         if (!array_key_exists($uniqueidentifier, $report->get_columns())) {
             throw new invalid_parameter_exception('Invalid column');
         }
@@ -237,8 +337,14 @@ class report {
     public static function add_report_condition(int $reportid, string $uniqueidentifier): filter {
         $report = manager::get_report_from_id($reportid);
 
+        // Ensure condition is available.
         if (!array_key_exists($uniqueidentifier, $report->get_conditions())) {
             throw new invalid_parameter_exception('Invalid condition');
+        }
+
+        // Ensure condition wasn't already added.
+        if (array_key_exists($uniqueidentifier, $report->get_active_conditions())) {
+            throw new invalid_parameter_exception('Duplicate condition');
         }
 
         $condition = new filter(0, (object) [
@@ -317,9 +423,14 @@ class report {
     public static function add_report_filter(int $reportid, string $uniqueidentifier): filter {
         $report = manager::get_report_from_id($reportid);
 
-        $reportfilters = $report->get_filters();
-        if (!array_key_exists($uniqueidentifier, $reportfilters)) {
+        // Ensure filter is available.
+        if (!array_key_exists($uniqueidentifier, $report->get_filters())) {
             throw new invalid_parameter_exception('Invalid filter');
+        }
+
+        // Ensure filter wasn't already added.
+        if (array_key_exists($uniqueidentifier, $report->get_active_filters())) {
+            throw new invalid_parameter_exception('Duplicate filter');
         }
 
         $filter = new filter(0, (object) [
@@ -387,42 +498,31 @@ class report {
     }
 
     /**
-     * Get available columns for a given report
-     *
-     * @param report_model $persistent
-     * @return array
-     *
      * @deprecated since Moodle 4.1 - please do not use this function any more, {@see custom_report_column_cards_exporter}
      */
-    public static function get_available_columns(report_model $persistent) : array {
-        debugging('The function ' . __FUNCTION__ . '() is deprecated, please do not use it any more. ' .
-            'See \'custom_report_column_cards_exporter\' class for replacement', DEBUG_DEVELOPER);
+    #[\core\attribute\deprecated('custom_report_column_cards_exporter', since: '4.1', final: true)]
+    public static function get_available_columns() {
+        \core\deprecation::emit_deprecation_if_present([self::class, __FUNCTION__]);
+    }
 
-        $available = [];
+    /**
+     * Duplicate report content to given report ID
+     *
+     * @param persistent[] $persistents
+     * @param int $reportid
+     */
+    private static function duplicate_report_content(array $persistents, int $reportid): void {
+        foreach ($persistents as $persistent) {
+            $record = $persistent->to_record();
+            unset($record->id, $record->usercreated);
 
-        $report = manager::get_report_from_persistent($persistent);
+            /** @var persistent $persistentclass */
+            $persistentclass = get_class($persistent);
 
-        // Get current report columns.
-        foreach ($report->get_columns() as $column) {
-            $entityname = $column->get_entity_name();
-            $entitytitle = $column->get_title();
-            if (!array_key_exists($entityname, $available)) {
-                $available[$entityname] = [
-                    'name' => (string) $report->get_entity_title($entityname),
-                    'key' => $entityname,
-                    'items' => [],
-                ];
-            }
-
-            $available[$entityname]['items'][] = [
-                'name' => $entitytitle,
-                'identifier' => $column->get_unique_identifier(),
-                'title' => get_string('addcolumn', 'core_reportbuilder', $entitytitle),
-                'action' => 'report-add-column'
-            ];
+            (new $persistentclass(0, $record))
+                ->set('reportid', $reportid)
+                ->create();
         }
-
-        return array_values($available);
     }
 
     /**

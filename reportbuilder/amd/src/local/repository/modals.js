@@ -22,7 +22,7 @@
  */
 
 import ModalForm from 'core_form/modalform';
-import {get_string as getString} from 'core/str';
+import {getString} from 'core/str';
 
 /**
  * Return modal instance
@@ -56,6 +56,22 @@ const createModalForm = (triggerElement, modalTitle, formClass, formArgs) => {
 export const createReportModal = (triggerElement, modalTitle, reportId = 0) => {
     return createModalForm(triggerElement, modalTitle, 'core_reportbuilder\\form\\report', {
         id: reportId,
+    });
+};
+
+/**
+ * Return duplicate report modal instance
+ *
+ * @param {EventTarget} triggerElement
+ * @param {Promise} modalTitle
+ * @param {Number} reportId
+ * @param {String} reportName
+ * @return {ModalForm}
+ */
+export const createDuplicateReportModal = (triggerElement, modalTitle, reportId, reportName) => {
+    return createModalForm(triggerElement, modalTitle, 'core_reportbuilder\\form\\duplicate_report', {
+        id: reportId,
+        name: reportName,
     });
 };
 

@@ -20,6 +20,7 @@ namespace core_reportbuilder;
 
 use advanced_testcase;
 use context_system;
+use core_reportbuilder\exception\report_access_exception;
 use core_reportbuilder_generator;
 use Throwable;
 use core_user\reportbuilder\datasource\users;
@@ -33,7 +34,7 @@ use core_reportbuilder\reportbuilder\audience\manual;
  * @copyright   2021 Paul Holden <paulh@moodle.com>
  * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-class permission_test extends advanced_testcase {
+final class permission_test extends advanced_testcase {
 
     /**
      * Test whether user can view reports list
@@ -43,8 +44,10 @@ class permission_test extends advanced_testcase {
 
         $this->resetAfterTest();
 
-        // User with permission.
-        $this->setAdminUser();
+        // User with default permission.
+        $user = $this->getDataGenerator()->create_user();
+        $this->setUser($user);
+
         try {
             permission::require_can_view_reports_list();
         } catch (Throwable $exception) {
@@ -52,15 +55,53 @@ class permission_test extends advanced_testcase {
         }
 
         // User without permission.
-        $user = $this->getDataGenerator()->create_user();
-        $this->setUser($user);
-
         $userrole = $DB->get_field('role', 'id', ['shortname' => 'user']);
         unassign_capability('moodle/reportbuilder:view', $userrole, context_system::instance());
 
         $this->expectException(report_access_exception::class);
         $this->expectExceptionMessage('You cannot view this report');
         permission::require_can_view_reports_list();
+    }
+
+    /**
+     * Data provider for {@see test_require_can_view_reports_list_with_capability}
+     *
+     * @return array[]
+     */
+    public static function require_can_view_reports_list_with_capability_provider(): array {
+        return [
+            ['moodle/reportbuilder:edit'],
+            ['moodle/reportbuilder:editall'],
+            ['moodle/reportbuilder:viewall'],
+        ];
+    }
+
+    /**
+     * Test that viewing reports list observes capability to do so
+     *
+     * @param string $capability
+     *
+     * @dataProvider require_can_view_reports_list_with_capability_provider
+     */
+    public function test_require_can_view_reports_list_with_capability(string $capability): void {
+        global $DB;
+
+        $this->resetAfterTest();
+
+        $user = $this->getDataGenerator()->create_user();
+        $this->setUser($user);
+
+        $userrole = $DB->get_field('role', 'id', ['shortname' => 'user']);
+
+        // Remove default capability, allow additional.
+        unassign_capability('moodle/reportbuilder:view', $userrole, context_system::instance());
+        assign_capability($capability, CAP_ALLOW, $userrole, context_system::instance());
+
+        try {
+            permission::require_can_view_reports_list();
+        } catch (Throwable $exception) {
+            $this->fail($exception->getMessage());
+        }
     }
 
     /**
@@ -81,8 +122,6 @@ class permission_test extends advanced_testcase {
      * Test whether user can view specific report
      */
     public function test_require_can_view_report(): void {
-        global $DB;
-
         $this->resetAfterTest();
 
         /** @var core_reportbuilder_generator $generator */
@@ -101,12 +140,54 @@ class permission_test extends advanced_testcase {
         $user = $this->getDataGenerator()->create_user();
         $this->setUser($user);
 
-        $userrole = $DB->get_field('role', 'id', ['shortname' => 'user']);
-        unassign_capability('moodle/reportbuilder:view', $userrole, context_system::instance());
-
         $this->expectException(report_access_exception::class);
         $this->expectExceptionMessage('You cannot view this report');
         permission::require_can_view_report($report);
+    }
+
+    /**
+     * Data provider for {@see test_require_can_view_report_with_capability}
+     *
+     * @return array[]
+     */
+    public static function require_can_view_report_with_capability_provider(): array {
+        return [
+            ['moodle/reportbuilder:editall'],
+            ['moodle/reportbuilder:viewall'],
+        ];
+    }
+
+    /**
+     * Test whether user can view specific report when they have capability to view all reports
+     *
+     * @param string $capability
+     *
+     * @dataProvider require_can_view_report_with_capability_provider
+     */
+    public function test_require_can_view_report_with_capability(string $capability): void {
+        global $DB;
+
+        $this->resetAfterTest();
+
+        // Admin creates a report, no audience.
+        $this->setAdminUser();
+
+        /** @var core_reportbuilder_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_reportbuilder');
+        $report = $generator->create_report(['name' => 'Admin report', 'source' => users::class]);
+
+        // Switch to new user, assign capability.
+        $user = $this->getDataGenerator()->create_user();
+        $this->setUser($user);
+
+        $userrole = $DB->get_field('role', 'id', ['shortname' => 'user']);
+        assign_capability($capability, CAP_ALLOW, $userrole, context_system::instance());
+
+        try {
+            permission::require_can_view_report($report);
+        } catch (Throwable $exception) {
+            $this->fail($exception->getMessage());
+        }
     }
 
     /**
@@ -335,7 +416,7 @@ class permission_test extends advanced_testcase {
      *
      * @return array
      */
-    public function can_create_report_limit_reached_provider(): array {
+    public static function can_create_report_limit_reached_provider(): array {
         return [
             [0, 1, true],
             [1, 1, false],
@@ -366,5 +447,45 @@ class permission_test extends advanced_testcase {
         // Set current custom report limit, and check whether user can create reports.
         $CFG->customreportslimit = $customreportslimit;
         $this->assertEquals($expected, permission::can_create_report());
+    }
+
+    /**
+     * Test that user can duplicate a report
+     */
+    public function test_require_can_duplicate_report(): void {
+        global $DB, $CFG;
+
+        $this->resetAfterTest();
+
+        $user = $this->getDataGenerator()->create_user();
+        $this->setUser($user);
+
+        $userrole = $DB->get_field('role', 'id', ['shortname' => 'user']);
+        assign_capability('moodle/reportbuilder:edit', CAP_ALLOW, $userrole, context_system::instance());
+
+        /** @var core_reportbuilder_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_reportbuilder');
+
+        // Confirm user can duplicate their own report.
+        $reportuser = $generator->create_report(['name' => 'User', 'source' => users::class]);
+        permission::require_can_duplicate_report($reportuser);
+
+        // Create a report by another user, confirm current user cannot duplicate it without proper permission.
+        $reportadmin = $generator->create_report(['name' => 'Admin', 'source' => users::class, 'usercreated' => get_admin()->id]);
+        try {
+            permission::require_can_duplicate_report($reportadmin);
+            $this->fail('Exception expected');
+        } catch (report_access_exception $e) {
+            $this->assertStringContainsString('You cannot duplicate this report', $e->getMessage());
+        }
+
+        assign_capability('moodle/reportbuilder:editall', CAP_ALLOW, $userrole, context_system::instance());
+        permission::require_can_duplicate_report($reportadmin);
+
+        // Set current custom report limit, and check whether user can duplicate the report.
+        $CFG->customreportslimit = 1;
+        $this->expectException(report_access_exception::class);
+        $this->expectExceptionMessage('You cannot duplicate this report');
+        permission::require_can_duplicate_report($reportuser);
     }
 }
